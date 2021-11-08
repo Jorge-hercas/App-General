@@ -1,0 +1,258 @@
+
+
+
+principales_hogar <-  base |>
+  filter(Servicio == "Especializados" ) |>
+  group_by(Cuenta, Subservicio) |>
+  summarise(servicios = sum(`Número de Servicios`),
+            periodos = n()) |>
+  mutate(servs_periodo = servicios/periodos) |> 
+  arrange(desc(servs_periodo) ) |>
+  filter(servs_periodo > 1) 
+
+
+
+datos <- base |> 
+  filter( Servicio == "Especializados"  ) 
+
+
+
+cuenta_grup <- principales_hogar |> 
+  select(Cuenta)
+
+
+
+ui <- fluidPage(
+  
+  column(
+    width = 4,
+    
+    
+    selectInput("filtro", label = "Cuenta:", choices = cuenta_grup$Cuenta, selected = head(cuenta_grup$Cuenta,1)),
+    selectInput("filtro_final", "Subservicio:", choices = NULL),
+    
+    
+    numericInput("periodos", "Escoge un número de periodos a pronosticar:",24, min = 0, max = 1000),
+    
+    br(), br(),
+    
+    actionBttn(
+      inputId = "modelar",
+      label = "Generar pronóstico",
+      style = "fill",
+      color = "primary"
+      #,icon = icon("sliders")
+    ),
+    
+    conditionalPanel("input.modelar > 0",
+                     shinycssloaders::withSpinner(
+                       reactableOutput("tabla1")
+                     )
+    )
+  ),
+  column(width = 8,
+         
+         conditionalPanel("input.modelar > 0",
+                          shinycssloaders::withSpinner(
+                            echarts4rOutput("grafico", width = 950, height = 400)
+                          )
+         ),
+         conditionalPanel("input.modelar > 0",
+                          shinycssloaders::withSpinner(
+                            echarts4rOutput("grafico_bandas", width = 950, height = 400)
+                          )
+         )
+  )
+)
+
+
+server <- function(input, output, session){
+  
+  example <- reactive({
+    datos |>
+      #group_by(.data[[input$filtro]]) |>
+      filter(Cuenta ==  input$filtro ) |>
+      group_by(Subservicio) |>
+      summarise(n = n()) |>
+      setNames(c("Valor", "Valor2"))
+  })
+  
+  observe({
+    req(example())
+    updateSelectInput(session, "filtro_final", choices = c(  example()$Valor  ))
+  })
+  
+  
+  
+  output$grafico <- renderEcharts4r({
+    
+    datos_mod <- datos |> 
+      filter(Cuenta == input$filtro &  Subservicio == input$filtro_final) |> 
+      group_by(Año_mes) |> 
+      summarise(total = sum(`Número de Servicios`))
+    
+    
+    if (length(datos_mod$total ) >6 ){
+      
+      ts_data <- ts(datos_mod$total, 
+                    start = as.numeric(substr(datos_mod$Año_mes[1], 1,4)), 
+                    frequency = 12
+      )
+      
+      modelo <- forecast::forecast(forecast::auto.arima(ts_data, trace = FALSE, approximation = TRUE), h = input$periodos)
+      
+      data_modelo <- fortify(modelo)
+      
+      data_modelo$`Point Forecast`[data_modelo$`Point Forecast` < 0] <- 0
+      
+      data_modelo |> 
+        e_charts(Index) |> 
+        e_line(Data, symbol = "none") |> 
+        e_line(`Point Forecast`, symbol = "none") |> 
+        e_legend(FALSE) |> 
+        e_tooltip(trigger = "axis") |> 
+        e_theme("auritus") |> 
+        e_title(paste0("Modelo para el subservicio '",input$filtro, "' considerando 2020" ))
+      
+      
+      
+    }else{
+      
+      ult_valor <- data.frame(
+        Año_mes = seq.Date(from = (as.Date(datos_mod$Año_mes[length(datos_mod$Año_mes)])%m+% months(1)), 
+                           to = (as.Date(datos_mod$Año_mes[length(datos_mod$Año_mes)])%m+% months(input$periodos)), 
+                           by = "month"),
+        total = rep(tail(datos_mod$total,1),input$periodos)
+        
+      ) |> 
+        setNames(c("Año_mes", "Forecast"))
+      
+      datos_mod |> 
+        bind_rows(ult_valor) |> 
+        e_charts(Año_mes) |> 
+        e_line(total, symbol = "none") |> 
+        e_line(Forecast, symbol = "none") |> 
+        e_legend(FALSE) |> 
+        e_tooltip(trigger = "axis") |> 
+        e_theme("auritus")
+      
+    }
+  })
+  
+  
+  output$grafico_bandas <- renderEcharts4r({
+    
+    datos_mod <- datos |> 
+      filter(Cuenta == input$filtro &  Subservicio == input$filtro_final & Año_mes < "2020-02-01") |> 
+      group_by(Año_mes) |> 
+      summarise(total = sum(`Número de Servicios`))
+    
+    
+    ts_data <- ts(datos_mod$total, 
+                  start = as.numeric(substr(datos_mod$Año_mes[1], 1,4)), 
+                  frequency = 12
+    )
+    
+    modelo <- forecast::forecast(forecast::auto.arima(ts_data, trace = FALSE, approximation = TRUE), h = input$periodos)
+    
+    data_modelo <- fortify(modelo)
+    
+    
+    val_2020 <- datos |> 
+      filter(Cuenta == input$filtro &  Subservicio == input$filtro_final & Año_mes > "2020-02-01") |> 
+      group_by(Año_mes) |> 
+      summarise(total = sum(`Número de Servicios`))
+    
+    
+    
+    data_modelo <- data_modelo |> 
+      left_join(val_2020, by = c("Index" = "Año_mes")) 
+    
+    
+    valor_ajuste <- (data_modelo$`Point Forecast`[which(data_modelo$total == tail(na.omit(data_modelo$total),1)  )]
+                     - data_modelo$total[which(data_modelo$total == tail(na.omit(data_modelo$total),1)  )]
+    )
+    
+    data_modelo <- data_modelo |> 
+      mutate(ajuste = (`Point Forecast`-
+                         valor_ajuste ) )
+    
+    data_modelo$ajuste[data_modelo$ajuste < 0] <- 0
+    
+    data_modelo |> 
+      e_charts(Index) |> 
+      e_line(Data, symbol = "none") |> 
+      e_line(ajuste, symbol = "none") |> 
+      e_line(total, symbol = "none") |> 
+      e_legend(FALSE) |> 
+      e_tooltip(trigger = "axis") |> 
+      e_theme("auritus") |> 
+      e_title(paste0("Modelo para el subservicio '",input$filtro, "' sin considerar 2020" ))
+    
+    
+  })
+  
+  
+  output$tabla1 <- renderReactable({
+    
+    datos_mod <- datos |> 
+      filter(Cuenta == input$filtro &  Subservicio == input$filtro_final & Año_mes < "2020-02-01") |> 
+      group_by(Año_mes) |> 
+      summarise(total = sum(`Número de Servicios`))
+    
+    
+    ts_data <- ts(datos_mod$total, 
+                  start = as.numeric(substr(datos_mod$Año_mes[1], 1,4)), 
+                  frequency = 12
+    )
+    
+    modelo <- forecast::forecast(forecast::auto.arima(ts_data, trace = FALSE, approximation = TRUE), h = input$periodos)
+    
+    data_modelo <- fortify(modelo)
+    
+    
+    val_2020 <- datos |> 
+      filter(Cuenta == input$filtro &  Subservicio == input$filtro_final & Año_mes > "2020-02-01") |> 
+      group_by(Año_mes) |> 
+      summarise(total = sum(`Número de Servicios`))
+    
+    
+    
+    data_modelo <- data_modelo |> 
+      left_join(val_2020, by = c("Index" = "Año_mes")) 
+    
+    
+    valor_ajuste <- (data_modelo$`Point Forecast`[which(data_modelo$total == tail(na.omit(data_modelo$total),1)  )]
+                     - data_modelo$total[which(data_modelo$total == tail(na.omit(data_modelo$total),1)  )]
+    )
+    
+    data_modelo <- data_modelo |> 
+      mutate(ajuste = (`Point Forecast`-
+                         valor_ajuste ) )
+    
+    data_modelo$ajuste[data_modelo$ajuste < 0] <- 0
+    
+    data_modelo$Index <- as.Date(data_modelo$Index)
+    
+    tabla <- data_modelo |> 
+      select(Index, total, ajuste) |> 
+      mutate(variacion = abs((total/ajuste)-1)) |> 
+      setNames(c("Fecha", "Valor Observado", "Pronóstico", "Variación porcentual")) |>
+      na.omit()
+    
+    reactable(tabla,
+              
+              columns = list(
+                Pronóstico = colDef(format = colFormat( digits = 0)),
+                `Variación porcentual` = colDef(format = colFormat( digits = 2, percent = TRUE))
+              )
+              
+    )
+    
+  })
+  
+  
+}
+
+
+shinyApp(ui, server)

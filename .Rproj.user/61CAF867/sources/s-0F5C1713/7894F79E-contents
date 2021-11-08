@@ -1,0 +1,19 @@
+
+library(shiny)
+library(readxl)
+library(echarts4r)
+library(shinycssloaders)
+library(reactable)
+library(dplyr)
+library(forecast)
+library(shinyWidgets)
+library(ggplot2)
+library(ggfortify)
+library(lubridate)
+library(leaflet)
+
+
+base <- read_excel("datos/base.xlsx")
+
+
+

@@ -1,0 +1,225 @@
+library(readxl)
+library(dplyr)
+library(shiny)
+library(echarts4r)
+library(forecast)
+library(ggfortify)
+library(shinyWidgets)
+library(shinycssloaders)
+library(highcharter)
+library(reactable)
+
+datos <- read_excel("base.xlsx")
+#datos <- cuentas_validdas
+
+#datos <- datos[datos$Cuenta != "-",]
+
+
+medicos <- base |> 
+  filter(Servicio == "Asistencia Médica")
+
+
+
+datos <- medicos 
+cuenta_grup <- datos |> 
+  group_by(Cuenta) |> 
+  summarise(n = n()) |> 
+  select(Cuenta)
+
+ui <- fluidPage( 
+  
+  column(
+    width = 4,
+    #selectInput("var",
+    #           "Escoge un servicio a modelar", choices = datos_select
+    #),
+    
+    selectInput("filtro", label = "Cuenta:", choices = cuenta_grup$Cuenta),
+    selectInput("filtro_final", "Servicio:", choices = NULL),
+    selectInput("filtro_final1", "Subservicio:", choices = NULL),
+    
+    numericInput("periodos", "Escoge un número de periodos a pronosticar:",24, min = -1000, max = 1000),
+    #numericInput("primdefestacionales", "Escoge un número de diferencias estacionales:",1, min = -1000, max = 1000),
+    #numericInput("futuros", "Escoge el máximo número de valores rezagados en el modelo a considerar:",1, min = 1, max = 1000),
+    #numericInput("neuronas", "Escoge la cantidad de periodos a pronosticar:",12, min = 1, max = 1000),
+    materialSwitch(
+      inputId = "tendencia",
+      label = "¿Incluir tendencia de largo plazo?", 
+      status = "primary",
+      right = TRUE
+    ),
+    br(), br(),
+    
+    actionBttn(
+      inputId = "modelar",
+      label = "Generar pronóstico", 
+      style = "fill",
+      color = "primary"
+      #,icon = icon("sliders")
+    ),
+    
+    conditionalPanel("input.modelar > 0",
+                     shinycssloaders::withSpinner(
+                       reactableOutput("tabla1")
+                     )
+    )
+  ),
+  column(width = 8,
+         
+         conditionalPanel("input.modelar > 0",
+                          shinycssloaders::withSpinner(
+                            echarts4rOutput("grafico", width = 950, height = 400)
+                          )
+         ),
+         conditionalPanel("input.modelar > 0",
+                          shinycssloaders::withSpinner(
+                            echarts4rOutput("grafico1", width = 950, height = 400)
+                          )
+         )
+  ) 
+)
+
+server <- function(input, output, session){
+  
+  
+  example <- reactive({
+    datos |> 
+      #group_by(.data[[input$filtro]]) |> 
+      filter(Cuenta ==  input$filtro ) |> 
+      group_by(Servicio) |> 
+      summarise(n = n()) |> 
+      setNames(c("Valor", "Valor2"))
+  })
+  
+  observe({
+    req(example())
+    updateSelectInput(session, "filtro_final", choices = c(  example()$Valor  ))
+  })
+  
+  
+  example2 <- reactive({
+    
+    datos |> 
+      #group_by(.data[[input$filtro]]) |> 
+      filter(Cuenta == input$filtro & Servicio == input$filtro_final ) |> 
+      group_by(Subservicio) |> 
+      summarise(n = n()) |> 
+      setNames(c("Valor", "Valor2"))
+    
+  })
+  
+  observe({
+    req(example2())
+    updateSelectInput(session, "filtro_final1", choices = c(  example2()$Valor  ))
+  })
+  
+  
+  
+  observeEvent(
+    input$modelar,{
+      
+      output$grafico <- renderEcharts4r({  
+        datos1 <-  datos |> 
+          filter(Cuenta == input$filtro &  
+                   Servicio == input$filtro_final & 
+                   Subservicio ==input$filtro_final1  & 
+                   Año_mes >"2020-01-01")
+        
+        
+        datos_ts <- ts(datos1$`Número de Servicios`, start = 2020, frequency = 12)
+        
+        airforecast <- forecast(bats(datos_ts
+                                     , 
+                                     use.trend = input$tendencia, 
+                                     
+        ), level = 90, h = 24)
+        observado <- fortify(airforecast, ts.connect = FALSE)
+        
+        final <- observado |> 
+          left_join(filter(datos, Cuenta == input$filtro &  
+                             Servicio == input$filtro_final & 
+                             Subservicio ==input$filtro_final1 &
+                             Año_mes >"2020-01-01"), 
+                    by = c("Index" = "Año_mes"))
+        
+        final |> 
+          e_charts(Index) |> 
+          e_title("Pronostico", paste0("De la variable: ", "input$filtro" ) ) |> 
+          e_line(Data, symbol = "none") |> 
+          e_line(`Point Forecast`, symbol = "none") |> 
+          #e_line(`Número de Servicios`, symbol = "none") |> 
+          e_tooltip(trigger = "axis") |> 
+          e_theme("auritus") |> 
+          e_color(color =RColorBrewer::brewer.pal(7,"Set2"))
+        
+        
+      }) 
+      
+      output$grafico1 <- renderEcharts4r({  
+        datos1 <-  datos |> 
+          filter(Cuenta == input$filtro &  
+                   Servicio == input$filtro_final & 
+                   Subservicio ==input$filtro_final1 
+                 & Año_mes >"2020-01-01")
+        
+        
+        datos_ts <- ts(datos1$`Número de Servicios`, start = 2020, frequency = 12)
+        
+        airforecast <- forecast(bats(datos_ts, 
+                                      use.trend = input$tendencia, 
+                                      
+        ), level = 90, h = 24)
+        observado <- fortify(airforecast, ts.connect = FALSE)
+        
+        observado |> 
+          e_charts(Index) |> 
+          e_title("Pronostico", "Con bandas de confianza al 95%" ) |> 
+          e_line(Data, symbol = "none", name = "Histórico") |> 
+          e_line(`Point Forecast`, symbol = "none", name = "Pronóstico") |> 
+          e_band(`Lo 90`, `Hi 90`) |> 
+          #e_line(total, symbol = "none", name = "Observado 2020") |> 
+          #e_y_axis(min = min(final$total, na.rm = TRUE)) |> 
+          e_tooltip(trigger = "axis") |> 
+          e_theme("walden") |> 
+          e_color(color =RColorBrewer::brewer.pal(7,"Set2"))
+        
+      }) 
+      
+      output$tabla1 <- renderReactable({
+        
+        datos1 <-  datos |> 
+          filter(Cuenta == input$filtro &  
+                   Servicio == input$filtro_final & 
+                   Subservicio ==input$filtro_final1  & 
+                   Año_mes >"2020-01-01")
+        
+        
+        datos_ts <- ts(datos1$`Número de Servicios`, start = 2020, frequency = 12)
+        
+        airforecast <- forecast(bats(datos_ts, 
+                                    use.trend = input$tendencia, 
+                                    
+        ), level = 90, h = 24)
+        observado <- fortify(airforecast, ts.connect = FALSE)
+        
+        final <- observado |> 
+          left_join(filter(datos, Cuenta == input$filtro &  
+                             Servicio == input$filtro_final & 
+                             Subservicio ==input$filtro_final1 &
+                             Año_mes >"2020-01-01"), 
+                    by = c("Index" = "Año_mes"))
+        final |> 
+          select(Index, `Point Forecast`, `Número de Servicios`) |> 
+          setNames(c("Fecha","Pronóstico", "Observado")) |> 
+          mutate(Diferencia = round((Pronóstico-Observado), digits = 2)) |> 
+          na.omit() |> 
+          reactable() 
+        
+        
+      })
+      
+      
+    }) 
+}
+
+shinyApp(ui, server)

@@ -1,0 +1,20 @@
+
+
+df <- data.frame(
+  var1 = rnorm(10),
+  var2 = sample(letters, 10)
+)
+
+
+knitr::kable(df)
+
+shinyApp(ui = fluidPage(
+  HTML(df |> 
+      kable() |> 
+      kable_styling("bordered", full_width = F) )
+  ),
+  server = function(input, output){}
+
+)
+
+

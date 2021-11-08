@@ -1,0 +1,24 @@
+
+
+df <- data.frame(
+  var1 = 1,
+  var2 = 2
+)
+
+ejemplo <- base |> 
+  filter(Cuenta == "ADRISA" 
+         & Servicio == "Asistencia Legal" 
+         & Subservicio == "Asesoría Legal Telefónica")
+
+
+length(ejemplo$Año_mes)
+
+max(ejemplo$`Número de Servicios`, na.rm = TRUE)
+
+
+if (df$var1 == 2 & df$var2 == 2){
+  print(1)
+}else{
+  print(2)
+  
+  }
